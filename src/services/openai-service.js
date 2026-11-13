@@ -81,18 +81,58 @@ CRITICAL RULES:
       transaction_type = 'payment';
     }
 
-    // 3. Extract Customer Name (words before 'ge', 'ka', 'ne', or action words)
+    // 3. Extract Customer Name
     let customer_name = null;
-    const nameMatch = text.match(/^([a-zA-Z\u0C80-\u0CFF\u0900-\u097F]+)(?:\s+(?:ge|ka|ne|ko|ki|ku))?/i);
-    if (nameMatch && nameMatch[1]) {
-      const candidate = nameMatch[1].trim();
-      const forbidden = ['give', 'add', 'record', 'check', 'total', 'please', 'jama', 'udhar'];
+    
+    // Pattern A: "to <Name>" or "ge/ka/ne <Name>" e.g. "credit to Priya", "paid by Suresh"
+    const prepMatch = text.match(/(?:to|from|by|for)\s+([a-zA-Z\u0C80-\u0CFF\u0900-\u097F]+)/i);
+    if (prepMatch && prepMatch[1]) {
+      const candidate = prepMatch[1].trim();
+      const forbidden = ['credit', 'payment', 'balance', 'rupees', 'rs', 'udhar', 'jama'];
       if (!forbidden.includes(candidate.toLowerCase())) {
         customer_name = candidate.charAt(0).toUpperCase() + candidate.slice(1);
       }
     }
 
+    // Pattern B: Leading name or name before particle (e.g. "Ramesh ge", "Suresh paid", "Priya 500")
+    if (!customer_name) {
+      const nameMatch = text.match(/^([a-zA-Z\u0C80-\u0CFF\u0900-\u097F]+)(?:\s+(?:ge|ka|ne|ko|ki|ku|paid|gave))?/i);
+      if (nameMatch && nameMatch[1]) {
+        const candidate = nameMatch[1].trim();
+        const forbidden = ['give', 'add', 'record', 'check', 'total', 'please', 'jama', 'udhar', 'credit', 'payment', 'balance'];
+        if (!forbidden.includes(candidate.toLowerCase())) {
+          customer_name = candidate.charAt(0).toUpperCase() + candidate.slice(1);
+        }
+      }
+    }
+
+    // Pattern C: Name after amount or action (e.g. "500 credit Ramesh")
+    if (!customer_name) {
+      const words = text.split(/\s+/);
+      const stopWords = ['give', 'add', 'record', 'check', 'total', 'please', 'jama', 'udhar', 'credit', 'payment', 'balance', 'rupees', 'rs', 'rupayi', 'kodi', 'kottidane', 'kodi', 'to', 'for', 'from', 'in', 'and'];
+      for (const w of words) {
+        const clean = w.replace(/[^a-zA-Z\u0C80-\u0CFF\u0900-\u097F]/g, '');
+        if (clean.length > 2 && !stopWords.includes(clean.toLowerCase()) && isNaN(clean)) {
+          customer_name = clean.charAt(0).toUpperCase() + clean.slice(1);
+          break;
+        }
+      }
+    }
+
     const clarification_needed = intent === INTENTS.UNKNOWN || (!customer_name && intent !== INTENTS.CHECK_BALANCE) || (intent !== INTENTS.CHECK_BALANCE && !amount);
+
+    let reply = 'ಕ್ಷಮಿಸಿ, ಗ್ರಾಹಕರ ಹೆಸರು ಅಥವಾ ಮೊತ್ತ ಸ್ಪಷ್ಟವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.';
+    if (!clarification_needed) {
+      if (intent === INTENTS.CHECK_BALANCE) {
+        reply = language.startsWith('en') 
+          ? `Checking ledger balance for ${customer_name}`
+          : `${customer_name} ಅವರ ಬ್ಯಾಲೆನ್ಸ್ ಚೆಕ್ ಮಾಡಲಾಗುತ್ತಿದೆ`;
+      } else {
+        reply = language.startsWith('en')
+          ? `Confirm: ${customer_name} ₹${amount} (${transaction_type})`
+          : `ಖಚಿತಪಡಿಸಿ: ${customer_name} ₹${amount}`;
+      }
+    }
 
     return {
       intent,
@@ -101,9 +141,7 @@ CRITICAL RULES:
       amount,
       notes: null,
       clarification_needed,
-      reply_message: clarification_needed 
-        ? 'ಕ್ಷಮಿಸಿ, ಗ್ರಾಹಕರ ಹೆಸರು ಅಥವಾ ಮೊತ್ತ ಸ್ಪಷ್ಟವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.'
-        : `ಖಚಿತಪಡಿಸಿ: ${customer_name} ₹${amount}`
+      reply_message: reply
     };
   }
 };

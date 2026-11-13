@@ -57,3 +57,4 @@ CREATE POLICY "Users can update own profile"
     TO authenticated
     USING (id = auth.uid())
     WITH CHECK (id = auth.uid());
+

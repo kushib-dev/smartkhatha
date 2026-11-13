@@ -20,6 +20,7 @@ export const VOICE_STATES = {
 let activeStream = null;
 let currentState = VOICE_STATES.IDLE;
 let assistantModal = null;
+let currentLiveTranscript = '';
 
 export const voiceAssistant = {
   /**
@@ -30,11 +31,29 @@ export const voiceAssistant = {
       this.cancel();
     }
 
+    currentLiveTranscript = '';
     this.renderModal(preferredLanguage);
     this.setState(VOICE_STATES.LISTENING, 'Listening to your command... Speak now');
 
+    // Start live browser speech recognition if supported
+    voiceService.startSpeechRecognitionFallback(
+      preferredLanguage,
+      (res) => {
+        if (res?.transcript) currentLiveTranscript = res.transcript;
+      },
+      (err) => console.warn('Live STT notice:', err),
+      (interim) => {
+        currentLiveTranscript = interim;
+        const transcriptBox = assistantModal?.querySelector('#voice-transcript-box');
+        if (transcriptBox && interim) {
+          transcriptBox.style.display = 'block';
+          transcriptBox.innerHTML = `<em>"${interim}"</em>`;
+        }
+      }
+    );
+
     try {
-      // 1. Request microphone access
+      // 1. Request microphone access for audio recording
       activeStream = await voiceService.requestPermission();
 
       // 2. Start recording
@@ -69,20 +88,7 @@ export const voiceAssistant = {
 
     } catch (err) {
       console.warn('Microphone error or permission denied:', err);
-
-      // Check if browser SpeechRecognition fallback can be tried
-      if (window.webkitSpeechRecognition || window.SpeechRecognition) {
-        this.setState(VOICE_STATES.LISTENING, 'Listening (Browser Speech Fallback)...');
-        voiceService.startSpeechRecognitionFallback(
-          preferredLanguage,
-          (result) => {
-            this.handleUnderstandingResult(result.understanding, result.transcript, shopId, preferredLanguage, onSuccess);
-          },
-          (sttErr) => {
-            this.setState(VOICE_STATES.ERROR, `Speech error: ${sttErr.message || 'Could not recognize voice'}`);
-          }
-        );
-      } else {
+      if (!window.webkitSpeechRecognition && !window.SpeechRecognition) {
         this.setState(VOICE_STATES.ERROR, err.message || 'Microphone access was denied. Please allow microphone permissions.');
       }
     }
@@ -95,20 +101,29 @@ export const voiceAssistant = {
     clearTimeout(this.autoStopTimer);
 
     try {
-      this.setState(VOICE_STATES.PROCESSING, 'Converting voice to text (Gnani Prisma STT)...');
-      const { base64Data } = await voiceService.stopRecording(stream);
+      this.setState(VOICE_STATES.PROCESSING, 'Processing voice command...');
+      voiceService.stopSpeechRecognitionFallback();
 
-      // Send to Edge Function
-      const result = await voiceService.processAudio(base64Data, mimeType, preferredLanguage);
+      let base64Data = null;
+      if (stream) {
+        try {
+          const recResult = await voiceService.stopRecording(stream);
+          base64Data = recResult.base64Data;
+        } catch (e) {
+          console.warn('Audio recording stop warning:', e);
+        }
+      }
+
+      // Send to processing pipeline (Local API, Edge Function, or local NLU)
+      const result = await voiceService.processAudio(base64Data, mimeType, preferredLanguage, currentLiveTranscript);
 
       if (result && result.understanding) {
-        this.setState(VOICE_STATES.UNDERSTANDING, 'Understanding transaction details (OpenAI)...');
-        this.handleUnderstandingResult(result.understanding, result.transcript, shopId, preferredLanguage, onSuccess);
+        this.setState(VOICE_STATES.UNDERSTANDING, 'Understanding transaction details...');
+        this.handleUnderstandingResult(result.understanding, result.transcript || currentLiveTranscript, shopId, preferredLanguage, onSuccess);
       } else {
-        // Fallback: If edge function credentials are not yet set
         this.setState(
           VOICE_STATES.ERROR,
-          'Voice credentials (Gnani Prisma / OpenAI) are not yet configured in Supabase Edge Secrets. Please configure them or use browser speech recognition.'
+          'No speech was detected or understood. Please speak clearly and try again.'
         );
       }
     } catch (err) {

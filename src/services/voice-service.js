@@ -79,63 +79,125 @@ export const voiceService = {
   },
 
   /**
-   * Send audio to Supabase Edge Function `process-voice` (Gnani Prisma STT + OpenAI NLU)
+   * Process voice audio or transcript through local API, Supabase Edge Function, or local NLU
    */
-  async processAudio(base64Data, mimeType, language = 'kn-IN') {
-    try {
-      const { data, error } = await supabase.functions.invoke('process-voice', {
-        body: {
-          audioData: base64Data,
-          mimeType: mimeType,
-          language: language
+  async processAudio(base64Data, mimeType, language = 'kn-IN', transcriptHint = '') {
+    // 1. If transcript exists, try local Vite dev server API with OpenAI
+    if (transcriptHint) {
+      try {
+        const localRes = await fetch('/api/process-voice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript: transcriptHint, language })
+        });
+        if (localRes.ok) {
+          const localData = await localRes.json();
+          if (localData && localData.understanding) {
+            return localData;
+          }
         }
-      });
-
-      if (!error && data && data.understanding) {
-        return {
-          provider: 'gnani-prisma-openai',
-          transcript: data.transcript,
-          understanding: data.understanding
-        };
+      } catch (localErr) {
+        console.warn('Local process-voice API call warning:', localErr);
       }
-    } catch (edgeErr) {
-      console.warn('Process-voice Edge Function unavailable or unconfigured:', edgeErr);
+    }
+
+    // 2. Attempt Supabase Edge Function `process-voice`
+    if (base64Data) {
+      try {
+        const { data, error } = await supabase.functions.invoke('process-voice', {
+          body: {
+            audioData: base64Data,
+            mimeType: mimeType,
+            language: language
+          }
+        });
+
+        if (!error && data && data.understanding) {
+          return {
+            provider: 'gnani-prisma-openai',
+            transcript: data.transcript,
+            understanding: data.understanding
+          };
+        }
+      } catch (edgeErr) {
+        console.warn('Supabase edge function process-voice unavailable:', edgeErr);
+      }
+    }
+
+    // 3. Robust client-side fallback if transcript was captured
+    if (transcriptHint) {
+      const understanding = openaiService.parseLocally(transcriptHint, language);
+      return {
+        provider: 'browser-speech-local-nlu',
+        transcript: transcriptHint,
+        understanding
+      };
     }
 
     return null;
   },
 
   /**
-   * Client-side Web Speech Recognition fallback for testing before Gnani Prisma keys are added to Supabase Secrets.
-   * Clearly marked as browser fallback.
+   * Start real-time speech recognition
    */
-  startSpeechRecognitionFallback(language = 'kn-IN', onResult, onError) {
+  startSpeechRecognitionFallback(language = 'kn-IN', onResult, onError, onInterim) {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      onError(new Error('SpeechRecognition is not supported in this browser. Please use Chrome/Edge or configure Gnani Prisma.'));
-      return;
+      if (onError) onError(new Error('SpeechRecognition is not supported in this browser. Please use Chrome or Edge.'));
+      return null;
     }
 
-    speechRecognitionInstance = new SpeechRecognition();
-    speechRecognitionInstance.lang = language || 'kn-IN';
-    speechRecognitionInstance.interimResults = false;
-    speechRecognitionInstance.maxAlternatives = 1;
+    try {
+      if (speechRecognitionInstance) {
+        this.stopSpeechRecognitionFallback();
+      }
 
-    speechRecognitionInstance.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      const understanding = openaiService.parseLocally(transcript, language);
-      onResult({
-        provider: 'browser-stt-fallback',
-        transcript,
-        understanding
-      });
-    };
+      speechRecognitionInstance = new SpeechRecognition();
+      speechRecognitionInstance.lang = language || 'kn-IN';
+      speechRecognitionInstance.continuous = true;
+      speechRecognitionInstance.interimResults = true;
+      speechRecognitionInstance.maxAlternatives = 1;
 
-    speechRecognitionInstance.onerror = (err) => {
-      onError(err);
-    };
+      let finalTranscript = '';
 
-    speechRecognitionInstance.start();
+      speechRecognitionInstance.onresult = (event) => {
+        let interimTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript + ' ';
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+
+        const combined = (finalTranscript + interimTranscript).trim();
+        if (onInterim && combined) {
+          onInterim(combined);
+        }
+
+        if (event.results[event.results.length - 1].isFinal && onResult) {
+          const understanding = openaiService.parseLocally(combined, language);
+          onResult({
+            provider: 'browser-stt',
+            transcript: combined,
+            understanding
+          });
+        }
+      };
+
+      speechRecognitionInstance.onerror = (err) => {
+        console.warn('SpeechRecognition event warning:', err.error);
+        if (onError && err.error !== 'no-speech') {
+          onError(err);
+        }
+      };
+
+      speechRecognitionInstance.start();
+      return speechRecognitionInstance;
+    } catch (e) {
+      console.warn('Could not start speech recognition:', e);
+      return null;
+    }
   },
 
   stopSpeechRecognitionFallback() {
