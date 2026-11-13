@@ -96,8 +96,10 @@ export function renderLoginPage(container) {
     } catch (err) {
       console.error('Login error:', err);
       let errorMsg = err.message || 'Login failed. Please check your credentials.';
-      if (errorMsg.toLowerCase().includes('invalid login credentials')) {
-        errorMsg = 'Invalid login credentials. If you have not created your shop account yet, please click "Register Your Shop" below to create it first.';
+      if (errorMsg.toLowerCase().includes('invalid login credentials') || errorMsg.toLowerCase().includes('invalid_grant')) {
+        errorMsg = 'Incorrect email or password. Please verify your password and try again.';
+      } else if (errorMsg.toLowerCase().includes('email not confirmed')) {
+        errorMsg = 'Email address is not yet confirmed. Please verify your account or contact support.';
       }
       errorAlert.textContent = errorMsg;
       errorAlert.style.display = 'block';
