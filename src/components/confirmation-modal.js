@@ -3,6 +3,7 @@ import { formatINR } from '../utils/currency.js';
 import { formatDate } from '../utils/date.js';
 import { showToast } from '../utils/toast.js';
 import { ttsService } from '../services/tts-service.js';
+import { namesMatch } from '../utils/transliteration.js';
 
 export async function openConfirmationModal({
   shopId,
@@ -157,27 +158,6 @@ export async function openConfirmationModal({
 
   // Customer Matching Algorithm
   try {
-    const rawSearch = customerName ? customerName.trim() : '';
-    const searchParam = rawSearch.toLowerCase();
-    
-    // Transliteration mapping for Kannada <-> English common names
-    const nameMap = {
-      'ರಮೇಶ': 'ramesh', 'ರಮೇಶ್': 'ramesh', 'ramesh': 'ರಮೇಶ',
-      'ಸುರೇಶ': 'suresh', 'ಸುರೇಶ್': 'suresh', 'suresh': 'ಸುರೇಶ',
-      'ಕುಮಾರ': 'kumar', 'ಕುಮಾರ್': 'kumar', 'kumar': 'ಕುಮಾರ',
-      'ಮಹೇಶ': 'mahesh', 'ಮಹೇಶ್': 'mahesh', 'mahesh': 'ಮಹೇಶ',
-      'ಮಂಜು': 'manju', 'ಮಂಜುನಾಥ': 'manjunath', 'manju': 'ಮಂಜು', 'manjunath': 'ಮಂಜುನಾಥ',
-      'ಗಣೇಶ': 'ganesh', 'ಗಣೇಶ್': 'ganesh', 'ganesh': 'ಗಣೇಶ',
-      'ಪ್ರಿಯಾ': 'priya', 'ಪ್ರಿಯ': 'priya', 'priya': 'ಪ್ರಿಯಾ',
-      'ರಾಜು': 'raju', 'raju': 'ರಾಜು',
-      'ಮಲ್ಲು': 'mallu', 'mallu': 'ಮಲ್ಲು',
-      'ಆನಂದ': 'anand', 'ಆನಂದ್': 'anand', 'anand': 'ಆನಂದ',
-      'ಸಂತೋಷ': 'santosh', 'ಸಂತೋಷ್': 'santosh', 'santosh': 'ಸಂತೋಷ',
-      'ರವೀ': 'ravi', 'ರವಿ': 'ravi', 'ravi': 'ರವಿ'
-    };
-
-    const altSearch = nameMap[searchParam] || '';
-
     const { data: matchedCustomers, error } = await supabase
       .from('customers')
       .select('id, customer_name, phone')
@@ -186,17 +166,12 @@ export async function openConfirmationModal({
 
     if (error) throw error;
 
-    const filtered = (matchedCustomers || []).filter(c => {
-      const cName = c.customer_name.toLowerCase();
-      return (
-        cName.includes(searchParam) ||
-        searchParam.includes(cName) ||
-        (altSearch && (cName.includes(altSearch) || altSearch.includes(cName)))
-      );
-    });
+    const filtered = (matchedCustomers || []).filter(c => 
+      namesMatch(c.customer_name, customerName)
+    );
 
     if (filtered.length === 1) {
-      // Exact single match
+      // Exact or phonetic single match
       selectedCustomerId = filtered[0].id;
       customerContainer.innerHTML = `
         <strong style="font-size: 1.05rem; color: var(--text-primary);">${filtered[0].customer_name}</strong>
@@ -205,9 +180,9 @@ export async function openConfirmationModal({
       confirmBtn.disabled = false;
     } else if (filtered.length > 1) {
       // Multiple matches: show dropdown to select
+      selectedCustomerId = filtered[0].id;
       customerContainer.innerHTML = `
         <select id="multi-customer-select" class="form-control" style="font-size: 0.85rem; padding: 0.35rem 0.5rem; min-height: 32px;">
-          <option value="">-- Choose matching customer --</option>
           ${filtered.map(c => `<option value="${c.id}">${c.customer_name} ${c.phone ? `(${c.phone})` : ''}</option>`).join('')}
         </select>
       `;
@@ -216,52 +191,43 @@ export async function openConfirmationModal({
         selectedCustomerId = selectEl.value;
         confirmBtn.disabled = !selectedCustomerId;
       });
+      confirmBtn.disabled = false;
     } else {
-      // No match found: allow creating customer or picking from list
+      // Brand new customer: Auto-create enabled! Never block the user!
+      selectedCustomerId = 'NEW_CUSTOMER';
       customerContainer.innerHTML = `
-        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem;">
-          <span style="color: var(--credit-color); font-size: 0.85rem;">"${customerName}" not found</span>
-          <button type="button" id="create-new-cust-btn" class="btn btn-outline btn-sm" style="font-size: 0.75rem; padding: 0.2rem 0.6rem; min-height: 28px;">
-            + Add "${customerName}" as New Customer
-          </button>
+        <div style="text-align: right;">
+          <strong style="font-size: 1.05rem; color: var(--primary);">${customerName}</strong>
+          <div style="display: flex; gap: 0.35rem; align-items: center; justify-content: flex-end; margin-top: 0.2rem;">
+            <span class="badge" style="background: #e0f2fe; color: #0369a1; font-size: 0.7rem; padding: 0.15rem 0.4rem; border-radius: 4px;">New Customer</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">(Will auto-create)</span>
+          </div>
+          ${matchedCustomers && matchedCustomers.length > 0 ? `
+            <div style="margin-top: 0.4rem;">
+              <select id="match-existing-select" class="form-control" style="font-size: 0.75rem; padding: 0.2rem 0.4rem; min-height: 28px;">
+                <option value="NEW_CUSTOMER">-- Or link to existing customer --</option>
+                ${matchedCustomers.map(c => `<option value="${c.id}">${c.customer_name} ${c.phone ? `(${c.phone})` : ''}</option>`).join('')}
+              </select>
+            </div>
+          ` : ''}
         </div>
       `;
 
-      const createBtn = customerContainer.querySelector('#create-new-cust-btn');
-      createBtn.addEventListener('click', async () => {
-        try {
-          createBtn.disabled = true;
-          createBtn.innerHTML = '<span class="spinner spinner-dark"></span> Adding...';
+      const matchSelect = customerContainer.querySelector('#match-existing-select');
+      if (matchSelect) {
+        matchSelect.addEventListener('change', () => {
+          selectedCustomerId = matchSelect.value;
+        });
+      }
 
-          const { data: newCust, error: newCustErr } = await supabase
-            .from('customers')
-            .insert({
-              shop_id: shopId,
-              customer_name: customerName
-            })
-            .select()
-            .single();
-
-          if (newCustErr) throw newCustErr;
-
-          selectedCustomerId = newCust.id;
-          customerContainer.innerHTML = `
-            <strong style="color: var(--primary);">${newCust.customer_name}</strong>
-            <span class="badge badge-neutral" style="font-size: 0.65rem;">New Customer</span>
-          `;
-          confirmBtn.disabled = false;
-        } catch (cErr) {
-          console.error('Error creating customer on the fly:', cErr);
-          alertBox.textContent = `Could not create customer: ${cErr.message}`;
-          alertBox.style.display = 'block';
-          createBtn.disabled = false;
-          createBtn.textContent = `+ Add "${customerName}" as New Customer`;
-        }
-      });
+      confirmBtn.disabled = false;
     }
   } catch (custErr) {
     console.error('Customer lookup error:', custErr);
-    customerContainer.innerHTML = `<span style="color: var(--credit-color); font-size: 0.85rem;">Lookup error</span>`;
+    // Even if lookup fails, allow auto-creating the customer!
+    selectedCustomerId = 'NEW_CUSTOMER';
+    customerContainer.innerHTML = `<strong style="font-size: 1.05rem; color: var(--primary);">${customerName}</strong>`;
+    confirmBtn.disabled = false;
   }
 
   // Handle Confirm Click
@@ -282,6 +248,21 @@ export async function openConfirmationModal({
       // Prevent duplicate clicks
       confirmBtn.disabled = true;
       confirmBtn.innerHTML = '<span class="spinner"></span> <span>Recording...</span>';
+
+      // If new customer, auto-provision in customers table first
+      if (selectedCustomerId === 'NEW_CUSTOMER') {
+        const { data: newCust, error: newCustErr } = await supabase
+          .from('customers')
+          .insert({
+            shop_id: shopId,
+            customer_name: customerName
+          })
+          .select()
+          .single();
+
+        if (newCustErr) throw newCustErr;
+        selectedCustomerId = newCust.id;
+      }
 
       const idempotencyKey = `voice-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
