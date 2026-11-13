@@ -95,7 +95,11 @@ export function renderLoginPage(container) {
       window.location.hash = '#/dashboard';
     } catch (err) {
       console.error('Login error:', err);
-      errorAlert.textContent = err.message || 'Login failed. Please check your credentials.';
+      let errorMsg = err.message || 'Login failed. Please check your credentials.';
+      if (errorMsg.toLowerCase().includes('invalid login credentials')) {
+        errorMsg = 'Invalid login credentials. If you have not created your shop account yet, please click "Register Your Shop" below to create it first.';
+      }
+      errorAlert.textContent = errorMsg;
       errorAlert.style.display = 'block';
       submitBtn.disabled = false;
       submitBtn.innerHTML = '<span>Login to Shop</span>';

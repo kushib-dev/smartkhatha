@@ -50,6 +50,9 @@ export const authService = {
 
     if (profileError) {
       console.error('Error creating profile:', profileError);
+      if (profileError.message.includes('schema cache') || profileError.message.includes('relation') || profileError.message.includes('does not exist')) {
+        throw new Error('Database tables not found. Please execute supabase/migrations/initial_schema.sql in your Supabase SQL Editor first.');
+      }
       throw new Error(`Profile creation failed: ${profileError.message}`);
     }
 
@@ -66,6 +69,9 @@ export const authService = {
 
     if (shopError) {
       console.error('Error creating shop:', shopError);
+      if (shopError.message.includes('schema cache') || shopError.message.includes('relation') || shopError.message.includes('does not exist')) {
+        throw new Error('Database tables not found. Please execute supabase/migrations/initial_schema.sql in your Supabase SQL Editor first.');
+      }
       throw new Error(`Shop creation failed: ${shopError.message}`);
     }
 
@@ -155,18 +161,54 @@ export const authService = {
     if (!isConfigured || !userId) return null;
 
     // Fetch profile
-    const { data: profile } = await supabase
+    let { data: profile } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .maybeSingle();
 
+    // Auto-provision profile if missing (e.g. registered before tables were run)
+    if (!profile) {
+      try {
+        const { data: newProfile } = await supabase
+          .from('profiles')
+          .upsert({
+            id: userId,
+            full_name: 'Shopkeeper',
+            preferred_language: 'kn-IN',
+            updated_at: new Date().toISOString()
+          })
+          .select()
+          .maybeSingle();
+        if (newProfile) profile = newProfile;
+      } catch (e) {
+        console.warn('Could not auto-create profile:', e);
+      }
+    }
+
     // Fetch shop
-    const { data: shop } = await supabase
+    let { data: shop } = await supabase
       .from('shops')
       .select('*')
       .eq('owner_id', userId)
       .maybeSingle();
+
+    // Auto-provision default shop if missing
+    if (!shop && profile) {
+      try {
+        const { data: newShop } = await supabase
+          .from('shops')
+          .insert({
+            owner_id: userId,
+            shop_name: 'My Kirana Store'
+          })
+          .select()
+          .maybeSingle();
+        if (newShop) shop = newShop;
+      } catch (e) {
+        console.warn('Could not auto-create shop:', e);
+      }
+    }
 
     cachedProfile = profile;
     cachedShop = shop;
