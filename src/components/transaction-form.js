@@ -1,7 +1,10 @@
 import { supabase } from '../services/supabase.js';
+import { authService } from '../services/auth-service.js';
+import { openCustomerModal } from './customer-modal.js';
 import { showToast } from '../utils/toast.js';
 
 export function openTransactionModal({ shopId, defaultType = 'credit', defaultCustomerId = null, onSuccess }) {
+  const effectiveShopId = shopId || authService.getCachedShop()?.id;
   const modalRoot = document.getElementById('modal-root') || document.body;
 
   const modalOverlay = document.createElement('div');
@@ -111,7 +114,7 @@ export function openTransactionModal({ shopId, defaultType = 'credit', defaultCu
       const { data: customers, error } = await supabase
         .from('customers')
         .select('id, customer_name, phone')
-        .eq('shop_id', shopId)
+        .eq('shop_id', effectiveShopId)
         .eq('is_archived', false)
         .order('customer_name', { ascending: true });
 
@@ -120,6 +123,34 @@ export function openTransactionModal({ shopId, defaultType = 'credit', defaultCu
       if (!customers || customers.length === 0) {
         customerSelect.innerHTML = '<option value="">No customers found. Please add a customer first.</option>';
         saveBtn.disabled = true;
+
+        const custGroup = customerSelect.closest('.form-group');
+        let helper = custGroup?.querySelector('#no-cust-helper');
+        if (!helper && custGroup) {
+          helper = document.createElement('div');
+          helper.id = 'no-cust-helper';
+          helper.style.marginTop = '0.5rem';
+          helper.innerHTML = `
+            <button type="button" id="tx-quick-create-cust-btn" class="btn btn-secondary btn-sm" style="width: 100%; justify-content: center;">
+              <span>+ Add Customer Now</span>
+            </button>
+          `;
+          custGroup.appendChild(helper);
+          helper.querySelector('#tx-quick-create-cust-btn').onclick = () => {
+            closeModal();
+            openCustomerModal({
+              shopId: effectiveShopId,
+              onSuccess: (newCust) => {
+                openTransactionModal({
+                  shopId: effectiveShopId,
+                  defaultType,
+                  defaultCustomerId: newCust?.id,
+                  onSuccess
+                });
+              }
+            });
+          };
+        }
         return;
       }
 

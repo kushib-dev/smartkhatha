@@ -216,12 +216,15 @@ export const authService = {
       }
     }
 
-    // Fetch shop
-    let { data: shop } = await supabase
+    // Fetch shop safely with .limit(1)
+    let { data: shops } = await supabase
       .from('shops')
       .select('*')
       .eq('owner_id', userId)
-      .maybeSingle();
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    let shop = shops && shops.length > 0 ? shops[0] : null;
 
     // Auto-provision default shop if missing
     if (!shop && profile) {
@@ -234,6 +237,7 @@ export const authService = {
             address: userMeta.address || null
           })
           .select()
+          .limit(1)
           .maybeSingle();
         if (newShop) shop = newShop;
       } catch (e) {
