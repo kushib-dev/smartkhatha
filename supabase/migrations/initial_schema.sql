@@ -374,3 +374,42 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
 
+-- ------------------------------------------------------------------------------
+-- AUTOMATIC PROFILE & SHOP PROVISIONING TRIGGER ON SIGNUP
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger AS $$
+BEGIN
+  -- Insert into profiles
+  INSERT INTO public.profiles (id, full_name, phone, preferred_language)
+  VALUES (
+    new.id,
+    COALESCE(new.raw_user_meta_data->>'full_name', 'Shopkeeper'),
+    new.raw_user_meta_data->>'phone',
+    COALESCE(new.raw_user_meta_data->>'preferred_language', 'kn-IN')
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    full_name = EXCLUDED.full_name,
+    phone = EXCLUDED.phone,
+    preferred_language = EXCLUDED.preferred_language,
+    updated_at = timezone('utc'::text, now());
+
+  -- Insert into shops
+  INSERT INTO public.shops (owner_id, shop_name, address)
+  VALUES (
+    new.id,
+    COALESCE(new.raw_user_meta_data->>'shop_name', 'My Kirana Store'),
+    new.raw_user_meta_data->>'address'
+  )
+  ON CONFLICT DO NOTHING;
+
+  RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+

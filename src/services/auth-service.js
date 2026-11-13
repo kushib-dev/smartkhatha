@@ -19,7 +19,7 @@ export const authService = {
       throw new Error('Supabase is not configured. Please add your credentials to the .env file.');
     }
 
-    // 1. Create auth user
+    // 1. Create auth user with metadata
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
@@ -27,7 +27,9 @@ export const authService = {
         data: {
           full_name: fullName,
           phone: phone || null,
-          preferred_language: preferredLanguage
+          preferred_language: preferredLanguage,
+          shop_name: shopName,
+          address: address || null
         }
       }
     });
@@ -36,58 +38,74 @@ export const authService = {
     if (!authData?.user) throw new Error('Registration failed. No user was returned.');
 
     const userId = authData.user.id;
+    const session = authData.session;
 
-    // 2. Create Profile record
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .upsert({
+    // If email confirmation is enabled in Supabase, session is null.
+    // Client cannot write to RLS-protected tables without an active session.
+    if (!session) {
+      return {
+        user: authData.user,
+        session: null,
+        needsConfirmation: true
+      };
+    }
+
+    // 2. If authenticated session exists, ensure Profile record
+    try {
+      const { data: pData, error: pErr } = await supabase
+        .from('profiles')
+        .upsert({
+          id: userId,
+          full_name: fullName,
+          phone: phone || null,
+          preferred_language: preferredLanguage,
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .maybeSingle();
+      if (pData) cachedProfile = pData;
+    } catch (e) {
+      console.warn('Profile creation non-fatal warning:', e);
+    }
+
+    // 3. Ensure Shop record
+    try {
+      const { data: sData, error: sErr } = await supabase
+        .from('shops')
+        .insert({
+          owner_id: userId,
+          shop_name: shopName,
+          address: address || null
+        })
+        .select()
+        .maybeSingle();
+      if (sData) cachedShop = sData;
+    } catch (e) {
+      console.warn('Shop creation non-fatal warning:', e);
+    }
+
+    if (!cachedProfile) {
+      cachedProfile = {
         id: userId,
         full_name: fullName,
         phone: phone || null,
-        preferred_language: preferredLanguage,
-        updated_at: new Date().toISOString()
-      });
-
-    if (profileError) {
-      console.error('Error creating profile:', profileError);
-      if (profileError.message.includes('schema cache') || profileError.message.includes('relation') || profileError.message.includes('does not exist')) {
-        throw new Error('Database tables not found. Please execute supabase/migrations/initial_schema.sql in your Supabase SQL Editor first.');
-      }
-      throw new Error(`Profile creation failed: ${profileError.message}`);
+        preferred_language: preferredLanguage
+      };
     }
-
-    // 3. Create Shop record
-    const { data: shopData, error: shopError } = await supabase
-      .from('shops')
-      .insert({
+    if (!cachedShop) {
+      cachedShop = {
         owner_id: userId,
         shop_name: shopName,
         address: address || null
-      })
-      .select()
-      .single();
-
-    if (shopError) {
-      console.error('Error creating shop:', shopError);
-      if (shopError.message.includes('schema cache') || shopError.message.includes('relation') || shopError.message.includes('does not exist')) {
-        throw new Error('Database tables not found. Please execute supabase/migrations/initial_schema.sql in your Supabase SQL Editor first.');
-      }
-      throw new Error(`Shop creation failed: ${shopError.message}`);
+      };
     }
-
-    cachedProfile = {
-      id: userId,
-      full_name: fullName,
-      phone: phone || null,
-      preferred_language: preferredLanguage
-    };
-    cachedShop = shopData;
 
     return {
       user: authData.user,
-      session: authData.session,
+      session,
       profile: cachedProfile,
-      shop: cachedShop
+      shop: cachedShop,
+      needsConfirmation: false
     };
   },
 
@@ -160,6 +178,17 @@ export const authService = {
   async fetchProfileAndShop(userId) {
     if (!isConfigured || !userId) return null;
 
+    // Fetch user metadata for fallback
+    let userMeta = {};
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.user_metadata) {
+        userMeta = user.user_metadata;
+      }
+    } catch (e) {
+      // ignore
+    }
+
     // Fetch profile
     let { data: profile } = await supabase
       .from('profiles')
@@ -167,15 +196,16 @@ export const authService = {
       .eq('id', userId)
       .maybeSingle();
 
-    // Auto-provision profile if missing (e.g. registered before tables were run)
+    // Auto-provision profile if missing (e.g. registered before trigger was created)
     if (!profile) {
       try {
         const { data: newProfile } = await supabase
           .from('profiles')
           .upsert({
             id: userId,
-            full_name: 'Shopkeeper',
-            preferred_language: 'kn-IN',
+            full_name: userMeta.full_name || 'Shopkeeper',
+            phone: userMeta.phone || null,
+            preferred_language: userMeta.preferred_language || 'kn-IN',
             updated_at: new Date().toISOString()
           })
           .select()
@@ -200,7 +230,8 @@ export const authService = {
           .from('shops')
           .insert({
             owner_id: userId,
-            shop_name: 'My Kirana Store'
+            shop_name: userMeta.shop_name || 'My Kirana Store',
+            address: userMeta.address || null
           })
           .select()
           .maybeSingle();

@@ -169,7 +169,7 @@ export function renderRegisterPage(container) {
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<span class="spinner"></span> <span>Registering Shop...</span>';
 
-      await authService.signUp({
+      const result = await authService.signUp({
         email,
         password,
         fullName,
@@ -179,11 +179,37 @@ export function renderRegisterPage(container) {
         preferredLanguage
       });
 
+      if (result?.needsConfirmation) {
+        showToast('Registration successful! Please confirm your email.', 'info');
+        const authBody = container.querySelector('.auth-body');
+        if (authBody) {
+          authBody.innerHTML = `
+            <div class="auth-alert auth-alert-info" style="margin-bottom: 1.5rem;">
+              <div>
+                <strong>Verify Your Email</strong><br>
+                A confirmation link was sent to <strong>${email}</strong>.<br><br>
+                Please check your inbox (and spam folder), click the verification link, and then log in to your shop ledger.
+              </div>
+            </div>
+            <a href="#/login" class="btn btn-primary btn-block btn-lg">
+              <span>Go to Login</span>
+            </a>
+          `;
+        }
+        return;
+      }
+
       showToast('Shop registered successfully!', 'success');
       window.location.hash = '#/dashboard';
     } catch (err) {
       console.error('Registration error:', err);
-      errorAlert.textContent = err.message || 'Registration failed. Please try again.';
+      let errorMsg = err.message || 'Registration failed. Please try again.';
+      if (errorMsg.toLowerCase().includes('already registered')) {
+        errorMsg = 'This email address is already registered. Please go to Login or use another email.';
+      } else if (errorMsg.toLowerCase().includes('rate limit')) {
+        errorMsg = 'Email confirmation rate limit reached. Please wait a few minutes or disable "Confirm email" in your Supabase dashboard.';
+      }
+      errorAlert.textContent = errorMsg;
       errorAlert.style.display = 'block';
       submitBtn.disabled = false;
       submitBtn.innerHTML = '<span>Create Shop Ledger</span>';
