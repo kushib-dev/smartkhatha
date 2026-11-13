@@ -157,7 +157,27 @@ export async function openConfirmationModal({
 
   // Customer Matching Algorithm
   try {
-    const searchParam = customerName ? customerName.trim().toLowerCase() : '';
+    const rawSearch = customerName ? customerName.trim() : '';
+    const searchParam = rawSearch.toLowerCase();
+    
+    // Transliteration mapping for Kannada <-> English common names
+    const nameMap = {
+      'ರಮೇಶ': 'ramesh', 'ರಮೇಶ್': 'ramesh', 'ramesh': 'ರಮೇಶ',
+      'ಸುರೇಶ': 'suresh', 'ಸುರೇಶ್': 'suresh', 'suresh': 'ಸುರೇಶ',
+      'ಕುಮಾರ': 'kumar', 'ಕುಮಾರ್': 'kumar', 'kumar': 'ಕುಮಾರ',
+      'ಮಹೇಶ': 'mahesh', 'ಮಹೇಶ್': 'mahesh', 'mahesh': 'ಮಹೇಶ',
+      'ಮಂಜು': 'manju', 'ಮಂಜುನಾಥ': 'manjunath', 'manju': 'ಮಂಜು', 'manjunath': 'ಮಂಜುನಾಥ',
+      'ಗಣೇಶ': 'ganesh', 'ಗಣೇಶ್': 'ganesh', 'ganesh': 'ಗಣೇಶ',
+      'ಪ್ರಿಯಾ': 'priya', 'ಪ್ರಿಯ': 'priya', 'priya': 'ಪ್ರಿಯಾ',
+      'ರಾಜು': 'raju', 'raju': 'ರಾಜು',
+      'ಮಲ್ಲು': 'mallu', 'mallu': 'ಮಲ್ಲು',
+      'ಆನಂದ': 'anand', 'ಆನಂದ್': 'anand', 'anand': 'ಆನಂದ',
+      'ಸಂತೋಷ': 'santosh', 'ಸಂತೋಷ್': 'santosh', 'santosh': 'ಸಂತೋಷ',
+      'ರವೀ': 'ravi', 'ರವಿ': 'ravi', 'ravi': 'ರವಿ'
+    };
+
+    const altSearch = nameMap[searchParam] || '';
+
     const { data: matchedCustomers, error } = await supabase
       .from('customers')
       .select('id, customer_name, phone')
@@ -166,10 +186,14 @@ export async function openConfirmationModal({
 
     if (error) throw error;
 
-    const filtered = matchedCustomers.filter(c => 
-      c.customer_name.toLowerCase().includes(searchParam) ||
-      searchParam.includes(c.customer_name.toLowerCase())
-    );
+    const filtered = (matchedCustomers || []).filter(c => {
+      const cName = c.customer_name.toLowerCase();
+      return (
+        cName.includes(searchParam) ||
+        searchParam.includes(cName) ||
+        (altSearch && (cName.includes(altSearch) || altSearch.includes(cName)))
+      );
+    });
 
     if (filtered.length === 1) {
       // Exact single match
